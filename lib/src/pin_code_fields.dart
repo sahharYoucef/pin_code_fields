@@ -91,6 +91,9 @@ class PinCodeTextField extends StatefulWidget {
   /// Enable or disable the Field. Default is [true]
   final bool enabled;
 
+  /// Enable or disable the Field paste. Default is [true]
+  final bool isPasteEnabled;
+
   /// [TextEditingController] to control the text manually. Sets a default [TextEditingController()] object if none given
   final TextEditingController? controller;
 
@@ -226,6 +229,7 @@ class PinCodeTextField extends StatefulWidget {
     this.focusNode,
     this.onTap,
     this.enabled = true,
+    this.isPasteEnabled = true,
     this.inputFormatters = const <TextInputFormatter>[],
     this.textStyle,
     this.useHapticFeedback = false,
@@ -298,14 +302,6 @@ class _PinCodeTextFieldState extends State<PinCodeTextField>
   late Animation<Offset> _offsetAnimation;
 
   late Animation<double> _cursorAnimation;
-  DialogConfig get _dialogConfig => widget.dialogConfig == null
-      ? DialogConfig()
-      : DialogConfig(
-          affirmativeText: widget.dialogConfig!.affirmativeText,
-          dialogContent: widget.dialogConfig!.dialogContent,
-          dialogTitle: widget.dialogConfig!.dialogTitle,
-          negativeText: widget.dialogConfig!.negativeText,
-        );
   PinTheme get _pinTheme => widget.pinTheme;
 
   Timer? _blinkDebounce;
@@ -395,14 +391,6 @@ class _PinCodeTextFieldState extends State<PinCodeTextField>
     assert(_pinTheme.fieldHeight > 0);
     assert(_pinTheme.fieldWidth > 0);
     assert(_pinTheme.borderWidth >= 0);
-    assert(_dialogConfig.affirmativeText != null &&
-        _dialogConfig.affirmativeText!.isNotEmpty);
-    assert(_dialogConfig.negativeText != null &&
-        _dialogConfig.negativeText!.isNotEmpty);
-    assert(_dialogConfig.dialogTitle != null &&
-        _dialogConfig.dialogTitle!.isNotEmpty);
-    assert(_dialogConfig.dialogContent != null &&
-        _dialogConfig.dialogContent!.isNotEmpty);
   }
 
   runHapticFeedback() {
@@ -661,72 +649,15 @@ class _PinCodeTextFieldState extends State<PinCodeTextField>
     );
   }
 
-  Future<void> _showPasteDialog(String pastedText) {
+  _showPasteDialog(String pastedText) {
     final formattedPastedText = pastedText
         .trim()
         .substring(0, min(pastedText.trim().length, widget.length));
 
-    final defaultPastedTextStyle = TextStyle(
-      fontWeight: FontWeight.bold,
-      color: Theme.of(context).colorScheme.onSecondary,
-    );
-
-    return showDialog(
-      context: context,
-      useRootNavigator: true,
-      builder: (context) => _dialogConfig.platform == Platform.iOS
-          ? CupertinoAlertDialog(
-              title: Text(_dialogConfig.dialogTitle!),
-              content: RichText(
-                text: TextSpan(
-                  text: _dialogConfig.dialogContent,
-                  style: TextStyle(
-                    color: Theme.of(context).textTheme.button!.color,
-                  ),
-                  children: [
-                    TextSpan(
-                      text: formattedPastedText,
-                      style: widget.pastedTextStyle ?? defaultPastedTextStyle,
-                    ),
-                    TextSpan(
-                      text: "?",
-                      style: TextStyle(
-                        color: Theme.of(context).textTheme.button!.color,
-                      ),
-                    )
-                  ],
-                ),
-              ),
-              actions: _getActionButtons(formattedPastedText),
-            )
-          : AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              title: Text(_dialogConfig.dialogTitle!),
-              content: RichText(
-                text: TextSpan(
-                  text: _dialogConfig.dialogContent,
-                  style: TextStyle(
-                      color: Theme.of(context).textTheme.button!.color),
-                  children: [
-                    TextSpan(
-                      text: formattedPastedText,
-                      style: widget.pastedTextStyle ?? defaultPastedTextStyle,
-                    ),
-                    TextSpan(
-                      text: " ?",
-                      style: TextStyle(
-                        color: Theme.of(context).textTheme.button!.color,
-                      ),
-                    )
-                  ],
-                ),
-              ),
-              actions: _getActionButtons(formattedPastedText),
-            ),
-    );
+    _textEditingController!.text = formattedPastedText;
   }
+
+  late TapDownDetails details;
 
   @override
   Widget build(BuildContext context) {
@@ -815,16 +746,23 @@ class _PinCodeTextFieldState extends State<PinCodeTextField>
                   if (widget.onTap != null) widget.onTap!();
                   _onFocus();
                 },
-                onLongPress: widget.enabled
+                onTapDown: (details) {
+                  this.details = details;
+                },
+                onLongPress: widget.enabled && widget.isPasteEnabled
                     ? () async {
-                        var data = await Clipboard.getData("text/plain");
-                        if (data?.text?.isNotEmpty ?? false) {
-                          if (widget.beforeTextPaste != null) {
-                            if (widget.beforeTextPaste!(data!.text)) {
-                              _showPasteDialog(data.text!);
+                        final value = await _showPopup(context);
+
+                        if (value == "paste") {
+                          var data = await Clipboard.getData("text/plain");
+                          if (data?.text?.isNotEmpty ?? false) {
+                            if (widget.beforeTextPaste != null) {
+                              if (widget.beforeTextPaste!(data!.text)) {
+                                _showPasteDialog(data.text!);
+                              }
+                            } else {
+                              _showPasteDialog(data!.text!);
                             }
-                          } else {
-                            _showPasteDialog(data!.text!);
                           }
                         }
                       }
@@ -839,6 +777,44 @@ class _PinCodeTextFieldState extends State<PinCodeTextField>
         ),
       ),
     );
+  }
+
+  Future<String?> _showPopup(BuildContext context) async {
+    final RenderBox renderBox = context.findRenderObject() as RenderBox;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final left = offset.dx + details.localPosition.dx - 20;
+    final top = offset.dy - widget.pinTheme.fieldHeight;
+    final right = left + renderBox.size.width;
+    final color = Theme.of(context).dialogBackgroundColor;
+    final TextStyle? style = Theme.of(context).textTheme.bodyMedium;
+    final RelativeRect rect = RelativeRect.fromLTRB(left, top, right, 0.0);
+    final value = await _showMenu<String>(
+      shape: MenuShapeBorder(details, rect, MediaQuery.of(context).size),
+      color: io.Platform.isIOS
+          ? CupertinoDynamicColor.resolve(color, context)
+          : color,
+      elevation: 1,
+      context: context,
+      position: rect,
+      items: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: () {
+          Navigator.pop<String>(context, "paste");
+        },
+        child: SizedBox(
+          height: 40,
+          width: 60,
+          child: Align(
+            alignment: Alignment.center,
+            child: Text(
+              "Paste",
+              style: style,
+            ),
+          ),
+        ),
+      ),
+    );
+    return value;
   }
 
   List<Widget> _generateFields() {
@@ -944,46 +920,433 @@ class _PinCodeTextFieldState extends State<PinCodeTextField>
         _inputList = replaceInputList;
       });
   }
-
-  List<Widget> _getActionButtons(String pastedText) {
-    var resultList = <Widget>[];
-    if (_dialogConfig.platform == Platform.iOS) {
-      resultList.addAll([
-        CupertinoDialogAction(
-          child: Text(_dialogConfig.negativeText!),
-          onPressed: () {
-            Navigator.of(context, rootNavigator: true).pop();
-          },
-        ),
-        CupertinoDialogAction(
-          child: Text(_dialogConfig.affirmativeText!),
-          onPressed: () {
-            _textEditingController!.text = pastedText;
-            Navigator.of(context, rootNavigator: true).pop();
-          },
-        ),
-      ]);
-    } else {
-      resultList.addAll([
-        TextButton(
-          child: Text(_dialogConfig.negativeText!),
-          onPressed: () {
-            Navigator.of(context, rootNavigator: true).pop();
-          },
-        ),
-        TextButton(
-          child: Text(_dialogConfig.affirmativeText!),
-          onPressed: () {
-            _textEditingController!.text = pastedText;
-            Navigator.of(context, rootNavigator: true).pop();
-          },
-        ),
-      ]);
-    }
-    return resultList;
-  }
 }
 
 enum PinCodeFieldShape { box, underline, circle }
 
 enum ErrorAnimationType { shake }
+
+class MenuShapeBorder extends ShapeBorder {
+  final bool usePadding;
+  final TapDownDetails details;
+  final RelativeRect globalPosition;
+  final Size size;
+
+  MenuShapeBorder(
+    this.details,
+    this.globalPosition,
+    this.size, {
+    this.usePadding = true,
+  });
+
+  @override
+  EdgeInsetsGeometry get dimensions =>
+      EdgeInsets.only(bottom: usePadding ? 20 : 0);
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) =>
+      _getPath(rect);
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    return _getPath(rect);
+  }
+
+  Path _getPath(Rect rect) {
+    late final startPoint;
+    if (size.width - details.globalPosition.dx < rect.width) {
+      startPoint = rect.width - (size.width - details.globalPosition.dx - 5);
+    } else {
+      startPoint = details.globalPosition.dx - globalPosition.left - 5;
+    }
+    final midPoint = startPoint + 5;
+    final endPoint = midPoint + 5;
+
+    return Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(6)))
+      ..moveTo(startPoint, rect.bottomCenter.dy)
+      ..lineTo(midPoint, rect.bottomCenter.dy + 10)
+      ..lineTo(endPoint, rect.bottomCenter.dy)
+      ..close();
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
+
+  @override
+  ShapeBorder scale(double t) => this;
+}
+
+class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
+  _PopupMenuRouteLayout(
+    this.position,
+    this.itemSizes,
+    this.selectedItemIndex,
+    this.textDirection,
+    this.padding,
+    this.avoidBounds,
+  );
+
+  // Rectangle of underlying button, relative to the overlay's dimensions.
+  final RelativeRect position;
+
+  // The sizes of each item are computed when the menu is laid out, and before
+  // the route is laid out.
+  List<Size?> itemSizes;
+
+  // The index of the selected item, or null if PopupMenuButton.initialValue
+  // was not specified.
+  final int? selectedItemIndex;
+
+  // Whether to prefer going to the left or to the right.
+  final TextDirection textDirection;
+
+  // The padding of unsafe area.
+  EdgeInsets padding;
+
+  // List of rectangles that we should avoid overlapping. Unusable screen area.
+  final Set<Rect> avoidBounds;
+
+  // We put the child wherever position specifies, so long as it will fit within
+  // the specified parent size padded (inset) by 8. If necessary, we adjust the
+  // child's position so that it fits.
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    // The menu can be at most the size of the overlay minus 8.0 pixels in each
+    // direction.
+    return BoxConstraints.loose(constraints.biggest).deflate(
+      const EdgeInsets.all(_kMenuScreenPadding) + padding,
+    );
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    // size: The size of the overlay.
+    // childSize: The size of the menu, when fully open, as determined by
+    // getConstraintsForChild.
+
+    final double buttonHeight = size.height - position.top - position.bottom;
+    // Find the ideal vertical position.
+    double y = position.top;
+    if (selectedItemIndex != null) {
+      double selectedItemOffset = _kMenuVerticalPadding;
+      for (int index = 0; index < selectedItemIndex!; index += 1) {
+        selectedItemOffset += itemSizes[index]!.height;
+      }
+      selectedItemOffset += itemSizes[selectedItemIndex!]!.height / 2;
+      y = y + buttonHeight / 2.0 - selectedItemOffset;
+    }
+
+    // Find the ideal horizontal position.
+    double x;
+    if (position.left > position.right) {
+      // Menu button is closer to the right edge, so grow to the left, aligned to the right edge.
+      x = size.width - position.right - childSize.width;
+    } else if (position.left < position.right) {
+      // Menu button is closer to the left edge, so grow to the right, aligned to the left edge.
+      x = position.left;
+    } else {
+      // Menu button is equidistant from both edges, so grow in reading direction.
+      assert(textDirection != null);
+      switch (textDirection) {
+        case TextDirection.rtl:
+          x = size.width - position.right - childSize.width;
+          break;
+        case TextDirection.ltr:
+          x = position.left;
+          break;
+      }
+    }
+    final Offset wantedPosition = Offset(x, y);
+    final Offset originCenter = position.toRect(Offset.zero & size).center;
+    final Iterable<Rect> subScreens =
+        DisplayFeatureSubScreen.subScreensInBounds(
+            Offset.zero & size, avoidBounds);
+    final Rect subScreen = _closestScreen(subScreens, originCenter);
+    return _fitInsideScreen(subScreen, childSize, wantedPosition);
+  }
+
+  Rect _closestScreen(Iterable<Rect> screens, Offset point) {
+    Rect closest = screens.first;
+    for (final Rect screen in screens) {
+      if ((screen.center - point).distance <
+          (closest.center - point).distance) {
+        closest = screen;
+      }
+    }
+    return closest;
+  }
+
+  Offset _fitInsideScreen(Rect screen, Size childSize, Offset wantedPosition) {
+    double x = wantedPosition.dx;
+    double y = wantedPosition.dy;
+    // Avoid going outside an area defined as the rectangle 8.0 pixels from the
+    // edge of the screen in every direction.
+    if (x < screen.left + _kMenuScreenPadding + padding.left) {
+      x = screen.left + _kMenuScreenPadding + padding.left;
+    } else if (x + childSize.width >
+        screen.right - _kMenuScreenPadding - padding.right) {
+      x = screen.right - childSize.width - _kMenuScreenPadding - padding.right;
+    }
+    if (y < screen.top + _kMenuScreenPadding + padding.top) {
+      y = _kMenuScreenPadding + padding.top;
+    } else if (y + childSize.height >
+        screen.bottom - _kMenuScreenPadding - padding.bottom) {
+      y = screen.bottom -
+          childSize.height -
+          _kMenuScreenPadding -
+          padding.bottom;
+    }
+
+    return Offset(x, y);
+  }
+
+  @override
+  bool shouldRelayout(_PopupMenuRouteLayout oldDelegate) {
+    // If called when the old and new itemSizes have been initialized then
+    // we expect them to have the same length because there's no practical
+    // way to change length of the items list once the menu has been shown.
+    assert(itemSizes.length == oldDelegate.itemSizes.length);
+
+    return position != oldDelegate.position ||
+        selectedItemIndex != oldDelegate.selectedItemIndex ||
+        textDirection != oldDelegate.textDirection ||
+        !listEquals(itemSizes, oldDelegate.itemSizes) ||
+        padding != oldDelegate.padding ||
+        !setEquals(avoidBounds, oldDelegate.avoidBounds);
+  }
+}
+
+const Duration _kMenuDuration = Duration(milliseconds: 300);
+const double _kMenuCloseIntervalEnd = 2.0 / 3.0;
+const double _kMenuHorizontalPadding = 16.0;
+const double _kMenuDividerHeight = 16.0;
+const double _kMenuMaxWidth = 5.0 * _kMenuWidthStep;
+const double _kMenuMinWidth = 2.0 * _kMenuWidthStep;
+const double _kMenuVerticalPadding = 8.0;
+const double _kMenuWidthStep = 56.0;
+const double _kMenuScreenPadding = 8.0;
+const double _kDefaultIconSize = 24.0;
+
+class _PopupMenuRoute<T> extends PopupRoute<T> {
+  _PopupMenuRoute({
+    required this.position,
+    required this.items,
+    this.initialValue,
+    this.elevation,
+    required this.barrierLabel,
+    this.semanticLabel,
+    this.shape,
+    this.color,
+    required this.capturedThemes,
+    this.constraints,
+  }) : itemSizes = List<Size?>.filled(items.length, null);
+
+  final RelativeRect position;
+  final List<Widget> items;
+  final List<Size?> itemSizes;
+  final T? initialValue;
+  final double? elevation;
+  final String? semanticLabel;
+  final ShapeBorder? shape;
+  final Color? color;
+  final CapturedThemes capturedThemes;
+  final BoxConstraints? constraints;
+
+  @override
+  Animation<double> createAnimation() {
+    return CurvedAnimation(
+      parent: super.createAnimation(),
+      curve: Curves.linear,
+      reverseCurve: const Interval(0.0, _kMenuCloseIntervalEnd),
+    );
+  }
+
+  @override
+  Duration get transitionDuration => _kMenuDuration;
+
+  @override
+  bool get barrierDismissible => true;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  final String barrierLabel;
+
+  @override
+  Widget buildPage(BuildContext context, Animation<double> animation,
+      Animation<double> secondaryAnimation) {
+    int? selectedItemIndex;
+    if (initialValue != null) {
+      for (int index = 0;
+          selectedItemIndex == null && index < items.length;
+          index += 1) {}
+    }
+
+    final Widget menu = _PopupMenu<T>(
+      route: this,
+      semanticLabel: semanticLabel,
+      constraints: constraints,
+    );
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    return MediaQuery.removePadding(
+      context: context,
+      removeTop: true,
+      removeBottom: true,
+      removeLeft: true,
+      removeRight: true,
+      child: Builder(
+        builder: (BuildContext context) {
+          return CustomSingleChildLayout(
+            delegate: _PopupMenuRouteLayout(
+              position,
+              itemSizes,
+              selectedItemIndex,
+              Directionality.of(context),
+              mediaQuery.padding,
+              _avoidBounds(mediaQuery),
+            ),
+            child: capturedThemes.wrap(menu),
+          );
+        },
+      ),
+    );
+  }
+
+  Set<Rect> _avoidBounds(MediaQueryData mediaQuery) {
+    return DisplayFeatureSubScreen.avoidBounds(mediaQuery).toSet();
+  }
+}
+
+class _PopupMenu<T> extends StatelessWidget {
+  const _PopupMenu({
+    super.key,
+    required this.route,
+    required this.semanticLabel,
+    this.constraints,
+  });
+
+  final _PopupMenuRoute<T> route;
+  final String? semanticLabel;
+  final BoxConstraints? constraints;
+
+  @override
+  Widget build(BuildContext context) {
+    final double unit = 1.0 /
+        (route.items.length +
+            1.5); // 1.0 for the width and 0.5 for the last item's fade.
+    final List<Widget> children = <Widget>[];
+    final PopupMenuThemeData popupMenuTheme = PopupMenuTheme.of(context);
+
+    for (int i = 0; i < route.items.length; i += 1) {
+      final double start = (i + 1) * unit;
+      final double end = clampDouble(start + 1.5 * unit, 0.0, 1.0);
+      final CurvedAnimation opacity = CurvedAnimation(
+        parent: route.animation!,
+        curve: Interval(start, end),
+      );
+      Widget item = route.items[i];
+
+      children.add(
+        FadeTransition(
+          opacity: opacity,
+          child: item,
+        ),
+      );
+    }
+
+    final CurveTween opacity =
+        CurveTween(curve: const Interval(0.0, 1.0 / 3.0));
+    final CurveTween width = CurveTween(curve: Interval(0.0, unit));
+    final CurveTween height =
+        CurveTween(curve: Interval(0.0, unit * route.items.length));
+
+    final Widget child = ConstrainedBox(
+      constraints: constraints ??
+          const BoxConstraints(
+            maxWidth: _kMenuMaxWidth,
+          ),
+      child: Semantics(
+        scopesRoute: true,
+        namesRoute: true,
+        explicitChildNodes: true,
+        label: semanticLabel,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [...children],
+        ),
+      ),
+    );
+
+    return AnimatedBuilder(
+      animation: route.animation!,
+      builder: (BuildContext context, Widget? child) {
+        return FadeTransition(
+          opacity: opacity.animate(route.animation!),
+          child: Material(
+            shape: route.shape ?? popupMenuTheme.shape,
+            color: route.color ?? popupMenuTheme.color,
+            type: MaterialType.card,
+            elevation: route.elevation ?? popupMenuTheme.elevation ?? 8.0,
+            child: Align(
+              alignment: AlignmentDirectional.topEnd,
+              widthFactor: width.evaluate(route.animation!),
+              heightFactor: height.evaluate(route.animation!),
+              child: child,
+            ),
+          ),
+        );
+      },
+      child: child,
+    );
+  }
+}
+
+Future<T?> _showMenu<T>({
+  required BuildContext context,
+  required RelativeRect position,
+  required Widget items,
+  T? initialValue,
+  double? elevation,
+  String? semanticLabel,
+  ShapeBorder? shape,
+  Color? color,
+  bool useRootNavigator = false,
+  BoxConstraints? constraints,
+}) {
+  assert(context != null);
+  assert(position != null);
+  assert(useRootNavigator != null);
+  assert(items != null);
+  assert(debugCheckHasMaterialLocalizations(context));
+
+  switch (Theme.of(context).platform) {
+    case TargetPlatform.iOS:
+    case TargetPlatform.macOS:
+      break;
+    case TargetPlatform.android:
+    case TargetPlatform.fuchsia:
+    case TargetPlatform.linux:
+    case TargetPlatform.windows:
+      semanticLabel ??= MaterialLocalizations.of(context).popupMenuLabel;
+  }
+
+  final NavigatorState navigator =
+      Navigator.of(context, rootNavigator: useRootNavigator);
+  return navigator.push(_PopupMenuRoute<T>(
+    position: position,
+    items: [items],
+    initialValue: initialValue,
+    elevation: elevation,
+    semanticLabel: semanticLabel,
+    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+    shape: shape,
+    color: color,
+    capturedThemes:
+        InheritedTheme.capture(from: context, to: navigator.context),
+    constraints: constraints,
+  ));
+}

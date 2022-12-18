@@ -1,7 +1,7 @@
 library pin_code_fields;
 
 import 'dart:async';
-
+import 'dart:io' as io;
 import 'dart:math';
 
 import 'package:flutter/cupertino.dart';
